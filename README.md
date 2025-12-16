@@ -129,7 +129,7 @@ This is expected! The pf configuration is loaded at boot, but the VPN interface 
 
 ## How It Works
 
-### Network Architecture
+### Network Architecture Example
 
 ```
 ┌─────────────────────────────────────────────────────┐
