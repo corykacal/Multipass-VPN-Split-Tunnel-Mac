@@ -133,12 +133,12 @@ This is expected! The pf configuration is loaded at boot, but the VPN interface 
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│  macOS Host                                          │
-│                                                      │
-│  ┌─────────────┐         ┌─────────────┐           │
-│  │   en0       │         │   utun4     │           │
-│  │  (WAN)      │         │  (AWS VPN)  │           │
-│  └──────┬──────┘         └──────┬──────┘           │
+│  macOS Host                                         │
+│                                                     │
+│  ┌─────────────┐         ┌─────────────┐            │
+│  │   en0       │         │   utun4     │            │
+│  │  (WAN)      │         │  (AWS VPN)  │            │
+│  └──────┬──────┘         └──────┬──────┘            │
 │         │                       │                   │
 │         │    ┌────────────────┐ │                   │
 │         └────┤  pf (packet    ├─┘                   │
@@ -274,4 +274,4 @@ If you encounter issues:
 
 ## License
 
-This script is provided as-is for internal use.
+MIT or something idk.
