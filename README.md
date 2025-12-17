@@ -2,7 +2,7 @@
 
 This script automatically configures macOS packet filter (pf) to enable Multipass VMs to access resources through AWS VPN Client while maintaining internet connectivity.
 
-Created as a way to bypass this issue: https://github.com/canonical/multipass/issues/1336
+Created as a way to bypass this issue: (Multipass VMs don't route traffic over VPN established on host (MacOS)) https://github.com/canonical/multipass/issues/1336
 
 ## What It Does
 
