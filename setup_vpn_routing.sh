@@ -1,10 +1,21 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+# ============================================================================
+# Dynamic VPN Routing Setup for Multipass + AWS VPN Client
+# ============================================================================
+# This script dynamically detects network interfaces and VPN routes,
+# then configures macOS packet filter (pf) to route traffic intelligently:
+# - VPN traffic (172.16.x.x, 10.x.x.x) -> through AWS VPN tunnel
+# - All other traffic -> through regular internet connection
+# ============================================================================
+
 echo "🔍 Detecting network configuration..."
 echo ""
 
-# Find the Multipass bridge interface
+# ============================================================================
+# 1. Find the Multipass bridge interface
+# ============================================================================
 echo "Looking for Multipass bridge interface..."
 BRIDGE_IF=$(ifconfig | grep -E "^bridge[0-9]+" -A 20 | grep -B 20 "member: vmenet0" | grep -E "^bridge[0-9]+" | head -1 | cut -d: -f1)
 
@@ -24,7 +35,9 @@ fi
 
 echo "✓ Multipass bridge: $BRIDGE_IF"
 
-# Find the WAN egress interface
+# ============================================================================
+# 2. Find the WAN egress interface
+# ============================================================================
 echo "Looking for WAN interface..."
 WAN_IF=$(route -n get default 2>/dev/null | grep interface | awk '{print $2}')
 
@@ -41,7 +54,9 @@ fi
 
 echo "✓ WAN interface: $WAN_IF"
 
-# Find the AWS VPN tunnel interface
+# ============================================================================
+# 3. Find the AWS VPN tunnel interface
+# ============================================================================
 echo "Looking for AWS VPN Client tunnel interface..."
 echo "(Checking for utun* interfaces with VPN routes)"
 echo ""
@@ -88,32 +103,45 @@ echo ""
 echo "✓ AWS VPN interface: $VPN_IF"
 echo "✓ VPN routes found: ${#VPN_ROUTES[@]}"
 
+# ============================================================================
+# 4. Validate we have necessary routes
+# ============================================================================
 if [[ ${#VPN_ROUTES[@]} -eq 0 ]]; then
     echo "❌ Error: No VPN routes found on $VPN_IF"
     echo "   VPN may not be properly connected or configured for split tunneling"
     exit 1
 fi
 
-# Normalize VPN routes to CIDR notation
+# ============================================================================
+# 5. Normalize VPN routes to CIDR notation
+# ============================================================================
 declare -a NORMALIZED_ROUTES
 for route in "${VPN_ROUTES[@]}"; do
     # Convert shorthand routes to full CIDR
-    if [[ "$route" == "10.110.1/27" ]]; then
-        NORMALIZED_ROUTES+=("10.110.1.0/27")
-    elif [[ "$route" == "172.16" ]]; then
-        NORMALIZED_ROUTES+=("172.16.0.0/12")
-    elif [[ "$route" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+/[0-9]+$ ]]; then
-        # Already in CIDR format
+    if [[ "$route" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)\.([0-9]+)/([0-9]+)$ ]]; then
+        # Already in full CIDR format
         NORMALIZED_ROUTES+=("$route")
-    elif [[ "$route" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    elif [[ "$route" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)/([0-9]+)$ ]]; then
+        # Missing last octet: e.g., "10.110.1/27"
+        NORMALIZED_ROUTES+=("${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.${BASH_REMATCH[3]}.0/${BASH_REMATCH[4]}")
+    elif [[ "$route" =~ ^([0-9]+)\.([0-9]+)/([0-9]+)$ ]]; then
+        # Missing two octets: e.g., "10.9/16"
+        NORMALIZED_ROUTES+=("${BASH_REMATCH[1]}.${BASH_REMATCH[2]}.0.0/${BASH_REMATCH[3]}")
+    elif [[ "$route" =~ ^([0-9]+)/([0-9]+)$ ]]; then
+        # Missing three octets: e.g., "10/8"
+        NORMALIZED_ROUTES+=("${BASH_REMATCH[1]}.0.0.0/${BASH_REMATCH[2]}")
+    elif [[ "$route" == "172.16" ]]; then
+        # 172.16 without mask -> /12 (covers 172.16-31.x.x)
+        NORMALIZED_ROUTES+=("172.16.0.0/12")
+    elif [[ "$route" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
         # Single IP, make it /32
         NORMALIZED_ROUTES+=("$route/32")
-    elif [[ "$route" =~ ^10\. ]]; then
-        # Assume /24 for 10.x networks without CIDR
+    elif [[ "$route" =~ ^([0-9]+)\.([0-9]+)\.([0-9]+)$ ]]; then
+        # Three octets without mask: e.g., "10.110.1" -> /24
         NORMALIZED_ROUTES+=("$route.0/24")
-    elif [[ "$route" =~ ^172\. ]]; then
-        # 172.16.0.0/12 covers 172.16-31.x.x
-        NORMALIZED_ROUTES+=("172.16.0.0/12")
+    elif [[ "$route" =~ ^([0-9]+)\.([0-9]+)$ ]]; then
+        # Two octets without mask: e.g., "10.9" -> /16
+        NORMALIZED_ROUTES+=("$route.0.0/16")
     else
         # Keep as-is and hope for the best
         NORMALIZED_ROUTES+=("$route")
@@ -130,7 +158,9 @@ for route in "${NORMALIZED_ROUTES[@]}"; do
     echo "    - $route"
 done
 
-# Generate pf anchor configuration
+# ============================================================================
+# 6. Generate pf anchor configuration
+# ============================================================================
 ANCHOR_FILE="/etc/pf.anchors/multipass_vpn"
 ANCHOR_TMP="/tmp/multipass_vpn.tmp"
 
@@ -192,6 +222,9 @@ cat >> "$ANCHOR_TMP" <<'EOF'
 pass out on $wan_if inet from $bridge_if:network to any keep state
 EOF
 
+# ============================================================================
+# 7. Install the configuration
+# ============================================================================
 echo ""
 echo "📦 Installing pf anchor configuration..."
 echo "   (requires sudo password)"
@@ -202,6 +235,9 @@ rm "$ANCHOR_TMP"
 
 echo "✓ Anchor file created: $ANCHOR_FILE"
 
+# ============================================================================
+# 8. Update main pf.conf if needed
+# ============================================================================
 echo ""
 echo "📝 Checking main pf configuration..."
 
@@ -238,11 +274,17 @@ else
     echo "   ✓ Anchor already configured in /etc/pf.conf"
 fi
 
+# ============================================================================
+# 9. Enable IP forwarding
+# ============================================================================
 echo ""
 echo "🔧 Enabling IP forwarding..."
 sudo sysctl -w net.inet.ip.forwarding=1 >/dev/null
 echo "✓ IP forwarding enabled"
 
+# ============================================================================
+# 10. Load and enable the pf rules
+# ============================================================================
 echo ""
 echo "🚀 Loading pf rules..."
 
@@ -262,6 +304,9 @@ sudo pfctl -e 2>/dev/null
 
 echo "✓ pf rules loaded and enabled"
 
+# ============================================================================
+# 11. Verify the configuration
+# ============================================================================
 echo ""
 echo "✅ Configuration complete!"
 echo ""
@@ -289,7 +334,7 @@ echo "  sudo pfctl -a multipass_vpn -sr  # Show routing rules"
 echo "  sudo pfctl -a multipass_vpn -sn  # Show NAT rules"
 echo ""
 echo "To test connectivity from your VM:"
-echo "  multipass exec <vm-name> -- curl https://internal-resource.example.com/..."
+echo "  multipass exec <vm-name> -- curl https://artifactory.redoak.com/..."
 echo ""
 echo "Note: Run this script again if you disconnect/reconnect VPN"
 echo "      or after reboot to restore routing."
